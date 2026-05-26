@@ -49,7 +49,7 @@ def get_bedrock_client():
 AGENT_ID       = st.secrets["BEDROCK_AGENT_ID"]        # Supervisor agent ID
 AGENT_ALIAS_ID = st.secrets["BEDROCK_AGENT_ALIAS_ID"]  # v1 alias ID
 
-def call_agent(user_message: str, session_id: str) -> str:
+def call_agent(user_message: str, session_id: str, status_container=None) -> str:
     """Invoke the TravelMind Supervisor agent and return the full response."""
     client = get_bedrock_client()
 
@@ -58,13 +58,63 @@ def call_agent(user_message: str, session_id: str) -> str:
         agentAliasId=AGENT_ALIAS_ID,
         sessionId=session_id,
         inputText=user_message,
+        enableTrace=True,
     )
 
     full_text = ""
+
+    AGENT_EMOJIS = {
+        "DestinationAgent":  "📍",
+        "HotelAgent":        "🏨",
+        "FoodAgent":         "🍜",
+        "ActivitiesAgent":   "🎭",
+        "TransportAgent":    "🚗",
+        "FreeExtrasAgent":   "🎁",
+        "FormatterAgent":    "📝",
+    }
+
     for event in response.get("completion", []):
+
+        # ── Actual response text ────────────────────────────────────────────
         if "chunk" in event:
             chunk_bytes = event["chunk"].get("bytes", b"")
             full_text += chunk_bytes.decode("utf-8")
+
+        # ── Trace events — show live progress ──────────────────────────────
+        elif "trace" in event and status_container:
+            trace_obj  = event["trace"].get("trace", {})
+            orch_trace = trace_obj.get("orchestrationTrace", {})
+
+            # Agent is thinking / reasoning
+            if "rationale" in orch_trace:
+                status_container.write("💭 &nbsp; Thinking...")
+
+            # Agent is calling a sub-agent or tool
+            elif "invocationInput" in orch_trace:
+                inv  = orch_trace["invocationInput"]
+                itype = inv.get("invocationType", "")
+
+                if itype == "AGENT_COLLABORATOR":
+                    agent_name = inv.get("agentCollaboratorInvocationInput", {}).get("agentCollaboratorName", "specialist")
+                    emoji = AGENT_EMOJIS.get(agent_name, "🤖")
+                    status_container.write(f"{emoji} &nbsp; Consulting **{agent_name}**...")
+
+                elif itype == "ACTION_GROUP":
+                    func = inv.get("actionGroupInvocationInput", {}).get("function", "tool")
+                    status_container.write(f"🔧 &nbsp; Calling tool: `{func}`...")
+
+            # Sub-agent responded
+            elif "observation" in orch_trace:
+                obs   = orch_trace["observation"]
+                otype = obs.get("type", "")
+
+                if otype == "AGENT_COLLABORATOR":
+                    agent_name = obs.get("agentCollaboratorInvocationOutput", {}).get("agentCollaboratorName", "specialist")
+                    emoji = AGENT_EMOJIS.get(agent_name, "🤖")
+                    status_container.write(f"✅ &nbsp; **{agent_name}** responded")
+
+                elif otype == "ACTION_GROUP":
+                    status_container.write("✅ &nbsp; Tool returned data")
 
     return full_text or "I'm sorry, I didn't receive a response. Please try again."
 
@@ -128,11 +178,13 @@ if prompt := st.chat_input("Where are you travelling to? 🌏"):
 
     # Get and show agent response
     with st.chat_message("assistant", avatar="🧳"):
-        with st.spinner("🔍 Planning your trip..."):
+        with st.status("🔍 Planning your trip...", expanded=True) as status:
             try:
-                reply = call_agent(prompt, st.session_state.session_id)
+                reply = call_agent(prompt, st.session_state.session_id, status_container=status)
+                status.update(label="✅ Done!", state="complete", expanded=False)
             except Exception as e:
                 reply = f"⚠️ Something went wrong: {str(e)}\n\nPlease try again."
+                status.update(label="❌ Error", state="error", expanded=False)
         st.markdown(reply)
 
     st.session_state.messages.append({"role": "assistant", "content": reply})
