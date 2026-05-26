@@ -1,6 +1,7 @@
 import boto3
 import streamlit as st
 import uuid
+from botocore.config import Config
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -32,11 +33,17 @@ st.markdown('<div class="subtitle">AI-powered travel budget planner — tell me 
 # ── Bedrock client ────────────────────────────────────────────────────────────
 @st.cache_resource
 def get_bedrock_client():
+    config = Config(
+        read_timeout=600,       # 10 minutes — agent calls 7 sub-agents sequentially
+        connect_timeout=10,
+        retries={"max_attempts": 0},
+    )
     return boto3.client(
         service_name="bedrock-agent-runtime",
         region_name=st.secrets["AWS_REGION"],
         aws_access_key_id=st.secrets["AWS_ACCESS_KEY_ID"],
         aws_secret_access_key=st.secrets["AWS_SECRET_ACCESS_KEY"],
+        config=config,
     )
 
 AGENT_ID       = st.secrets["BEDROCK_AGENT_ID"]        # Supervisor agent ID
